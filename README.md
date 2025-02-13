@@ -1,1 +1,1 @@
-# Local-Canonical-Correlation-Analysis
+# Geographically Weighted Canonical Correlation Analysis
