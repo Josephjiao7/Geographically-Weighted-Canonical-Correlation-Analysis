@@ -30,6 +30,39 @@ def bisquare_kernel(d, r):
     w[mask] = (1 - (d[mask] / r) ** 2) ** 2
     return w
 
+def exponential_kernel(d, r):
+    """
+    Exponential kernel function.
+    :param d: Distance vector.
+    :param r: Bandwidth (decay parameter).
+    :return: Weight vector.
+    """
+    return np.exp(-d / r)
+
+def boxcar_kernel(d, r):
+    """
+    Box-car (uniform) kernel function.
+    :param d: Distance vector.
+    :param r: Local bandwidth.
+    :return: Weight vector.
+    """
+    w = np.zeros_like(d)
+    w[d <= r] = 1.0
+    return w
+
+def tricube_kernel(d, r):
+    """
+    Tri-cube kernel function.
+    :param d: Distance vector.
+    :param r: Local bandwidth.
+    :return: Weight vector.
+    """
+    w = np.zeros_like(d)
+    mask = d <= r
+    w[mask] = (1 - (d[mask] / r) ** 3) ** 3
+    return w
+
+
 
 def gw_covariance(X, Y, W):
     """

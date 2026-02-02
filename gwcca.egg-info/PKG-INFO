@@ -1,17 +1,12 @@
-Metadata-Version: 2.4
+Metadata-Version: 2.1
 Name: gwcca
 Version: 0.1.0
-Summary: Geographically Weighted Canonical Correlation Analysis (GWCCA) with robust local covariance and optional smoothing.
+Summary: Geographically Weighted Canonical Correlation Analysis (GWCCA)
+Author: Joseph Jiao
 Requires-Python: >=3.9
 Description-Content-Type: text/markdown
-Requires-Dist: numpy>=1.22
-Requires-Dist: scipy>=1.9
-Requires-Dist: matplotlib>=3.6
-Provides-Extra: geo
-Requires-Dist: geopandas>=0.12; extra == "geo"
-Requires-Dist: pyogrio>=0.7; extra == "geo"
-Provides-Extra: plot
-Requires-Dist: matplotlib>=3.6; extra == "plot"
+Requires-Dist: numpy
+Requires-Dist: scipy
 
 # Geographically Weighted Canonical Correlation Analysis (GWCCA)
 

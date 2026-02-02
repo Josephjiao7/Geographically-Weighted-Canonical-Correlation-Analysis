@@ -1,10 +1,2 @@
-numpy>=1.22
-scipy>=1.9
-matplotlib>=3.6
-
-[geo]
-geopandas>=0.12
-pyogrio>=0.7
-
-[plot]
-matplotlib>=3.6
+numpy
+scipy
