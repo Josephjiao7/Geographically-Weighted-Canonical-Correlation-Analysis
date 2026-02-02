@@ -202,7 +202,7 @@ def gwcca_local(X, Y, coords, k_neighbors, q=2, include_self=True, kernel="gauss
 
 
 # ============================================================
-# Robust covariance via Huber IRLS (your code, kept)
+# Robust covariance via Huber IRLS
 # ============================================================
 
 def huber_weight(u, delta=1.345):
@@ -271,7 +271,7 @@ def robust_cov_blocks_huber(X, Y, W_base, delta=1.345, max_iter=10, tol=1e-4):
 
 
 # ============================================================
-# Robust GWCCA local (your whitening + SVD, kept)
+# Robust GWCCA local
 # ============================================================
 
 def gwcca_local_robust(
