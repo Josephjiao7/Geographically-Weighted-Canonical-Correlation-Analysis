@@ -753,3 +753,59 @@ def plot_loading_maps(gdf,
             ax.set_visible(False)
 
     plt.tight_layout()
+
+def gwcca_local_permutation_test(
+    X, Y, coords, k_neighbors, q,
+    rho_obs,
+    n_perm=999,
+    random_state=0,
+    two_sided=True
+):
+    """
+    Local permutation significance test for GWCCA canonical correlations.
+
+    Parameters
+    ----------
+    rho_obs : (n, q)
+        Observed local canonical correlations from gwcca()
+    n_perm : int
+        Number of permutations
+
+    Returns
+    -------
+    pvals : (n, q)
+        Empirical p-values for each location and component
+    """
+    rng = np.random.default_rng(random_state)
+    n = X.shape[0]
+
+    rho_perm = np.zeros((n_perm, n, q), dtype=float)
+
+    for b in range(n_perm):
+        # permutation: break X–Y correspondence
+        perm_idx = rng.permutation(n)
+        Y_perm = Y[perm_idx]
+
+        rho_b, _, _ = gwcca(
+            X, Y_perm, coords,
+            k_neighbors=k_neighbors,
+            q=q
+        )
+        rho_perm[b] = rho_b
+
+    pvals = np.zeros_like(rho_obs)
+
+    for k in range(q):
+        obs = rho_obs[:, k]
+        null = rho_perm[:, :, k]
+
+        if two_sided:
+            pvals[:, k] = (
+                np.sum(np.abs(null) >= np.abs(obs), axis=0) + 1
+            ) / (n_perm + 1)
+        else:
+            pvals[:, k] = (
+                np.sum(null >= obs, axis=0) + 1
+            ) / (n_perm + 1)
+
+    return pvals
