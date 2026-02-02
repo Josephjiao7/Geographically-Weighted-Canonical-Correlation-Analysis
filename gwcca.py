@@ -5,311 +5,194 @@ from sklearn.preprocessing import StandardScaler
 import matplotlib.colors as mcolors
 from matplotlib.colors import TwoSlopeNorm
 
-# ============================================================
-# Kernels
-# ============================================================
 
+# Gaussian kernel for weighting distances
 def gaussian_kernel(d, r):
     """
-    Gaussian kernel weights.
-    Parameters
-    ----------
-    d : array-like
-        Distances.
-    r : float
-        Bandwidth (usually distance to k-th neighbor).
-    Returns
-    -------
-    w : ndarray
-        Weights.
+    Gaussian kernel function.
+    :param d: Array of distances.
+    :param r: Bandwidth (set as the distance to the k-th neighbor).
+    :return: Array of weights.
     """
-    d = np.asarray(d, dtype=float)
-    r = float(r) if r is not None else 1.0
-    r = max(r, 1e-15)
-    return np.exp(-0.5*(d / r) ** 2)
+    return np.exp(-(d / r) ** 2)
 
 
+# bisquare kernel for weighting distances
 def bisquare_kernel(d, r):
     """
-    Bisquare kernel weights.
-    Parameters
-    ----------
-    d : array-like
-        Distances.
-    r : float
-        Bandwidth.
-    Returns
-    -------
-    w : ndarray
-        Weights.
+    Bisquare kernel function.
+    :param d: Distance vector.
+    :param r: Local bandwidth.
+    :return: Weight vector.
     """
-    d = np.asarray(d, dtype=float)
-    r = float(r) if r is not None else 1.0
-    r = max(r, 1e-15)
     w = np.zeros_like(d)
     mask = d <= r
     w[mask] = (1 - (d[mask] / r) ** 2) ** 2
     return w
 
 
-def _kernel_weights(d, bw, kernel="gaussian"):
-    if kernel == "bisquare":
-        return bisquare_kernel(d, bw)
-    return gaussian_kernel(d, bw)
-
-
-# ============================================================
-# Utilities
-# ============================================================
-
-def _stable_sign_flip(A, B):
-    """
-    Make the first element of each canonical vector positive to stabilize signs.
-    """
-    if A is None or B is None:
-        return A, B
-    s = np.sign(A[0, :])
-    s[s == 0] = 1.0
-    A = A * s
-    B = B * s
-    return A, B
-
-
-def _check_inputs(X, Y, coords, k_neighbors):
-    X = np.asarray(X, dtype=float)
-    Y = np.asarray(Y, dtype=float)
-    coords = np.asarray(coords, dtype=float)
-    if X.ndim != 2 or Y.ndim != 2:
-        raise ValueError("X and Y must be 2D arrays.")
-    if coords.ndim != 2 or coords.shape[1] != 2:
-        raise ValueError("coords must be (n, 2).")
-    if X.shape[0] != Y.shape[0] or X.shape[0] != coords.shape[0]:
-        raise ValueError("X, Y, coords must have the same number of rows.")
-    k_neighbors = int(k_neighbors)
-    if k_neighbors < 1:
-        raise ValueError("k_neighbors must be >= 1.")
-    return X, Y, coords, k_neighbors
-
-
-# ============================================================
-# Weighted covariance (local mean removed)
-# ============================================================
-
 def gw_covariance(X, Y, W):
     """
-    Weighted covariance blocks after removing the weighted mean.
-    Parameters
-    ----------
-    X : (m,p)
-    Y : (m,q)
-    W : (m,) or (m,1)
-    Returns
-    -------
-    Sigma_XX, Sigma_YY, Sigma_XY
+    Calculate weighted covariance matrices after removing the weighted mean.
+    :param X: First variable set (n x p).
+    :param Y: Second variable set (n x q).
+    :param W: Weight vector (n,).
+    :return: Sigma_XX, Sigma_YY, Sigma_XY.
     """
-    X = np.asarray(X, dtype=float)
-    Y = np.asarray(Y, dtype=float)
-    W = np.asarray(W, dtype=float).reshape(-1, 1)
-    sumW = float(W.sum()) + 1e-15
-
+    W = W.reshape(-1, 1)
+    sumW = W.sum()
     mu_X = (W * X).sum(axis=0) / sumW
     mu_Y = (W * Y).sum(axis=0) / sumW
-
     Xc = X - mu_X
     Yc = Y - mu_Y
-
     Sigma_XX = (Xc * W).T @ Xc / sumW
     Sigma_YY = (Yc * W).T @ Yc / sumW
     Sigma_XY = (Xc * W).T @ Yc / sumW
     return Sigma_XX, Sigma_YY, Sigma_XY
 
 
-# ============================================================
-# Normal GWCCA local
-# ============================================================
-
-def gwcca_local(X, Y, coords, k_neighbors, q=2, include_self=True, kernel="gaussian"):
+def gwcca_local(X, Y, coords, k_neighbors, q=2):
     """
-    Classical GWCCA local estimation using generalized eigen approach.
-
-    Note
-    ----
-    This keeps your original "Sigma += I" regularization (as-is).
-    If you dislike it, set it to a smaller value yourself in your own code,
-    but I will NOT change your core logic here.
-
-    Returns
-    -------
-    rho : (n,q)
-    a   : (n,p,q)
-    b   : (n,qY,q)
+    Compute local canonical correlations and loadings using GWCCA.
+    :param X: (n x p) data array for set X.
+    :param Y: (n x q) data array for set Y.
+    :param coords: (n x 2) coordinate array.
+    :param k_neighbors: Number of nearest neighbors for local estimation.
+    :param q: Number of canonical variables to retain.
+    :return: rho (canonical correlations), a (loadings for X), b (loadings for Y).
     """
-    X, Y, coords, k_neighbors = _check_inputs(X, Y, coords, k_neighbors)
     n, p = X.shape
-    qY = Y.shape[1]
-    q = int(q)
-    rmax = min(p, qY)
-    if q < 1 or q > rmax:
-        raise ValueError(f"q must be in [1, {rmax}], got {q}.")
+    q_Y = Y.shape[1]
+    r = q
 
-    rho = np.full((n, q), np.nan, dtype=float)
-    a = np.full((n, p, q), np.nan, dtype=float)
-    b = np.full((n, qY, q), np.nan, dtype=float)
+    rho = np.zeros((n, r))
+    a = np.zeros((n, p, r))
+    b = np.zeros((n, q_Y, r))
 
     tree = cKDTree(coords)
 
     for i in range(n):
+        # Get k+1 neighbors (including the point itself)
         d, idx = tree.query(coords[i], k=k_neighbors + 1)
-        if not include_self:
-            m = (idx != i)
-            d, idx = d[m], idx[m]
-        if idx.size < 2:
-            continue
+        # Set local bandwidth as the distance to the k-th neighbor
+        bandwidth = d[-1]
+        # Compute weights with Gaussian kernel (or replace with bisquare_kernel if desired)
+        W = gaussian_kernel(d, bandwidth)
 
-        bw = float(d[-1]) if d.size > 0 else 1.0
-        W = _kernel_weights(d, bw, kernel=kernel)
+        # Compute weighted covariance matrices using only neighbors (with local mean removal)
+        Sigma_XX, Sigma_YY, Sigma_XY = gw_covariance(X[idx], Y[idx], W)
 
-        Sxx, Syy, Sxy = gw_covariance(X[idx], Y[idx], W)
-
-        # Your original default regularization (kept exactly)
-        Sxx = Sxx + np.eye(p)
-        Syy = Syy + np.eye(qY)
+        # Regularize to ensure numerical stability
+        Sigma_XX += np.eye(p)
+        Sigma_YY += np.eye(q_Y)
 
         try:
-            invSxx = np.linalg.pinv(Sxx)
-            invSyy = np.linalg.pinv(Syy)
-            M = invSxx @ Sxy @ invSyy @ Sxy.T
+            inv_Sigma_XX = np.linalg.pinv(Sigma_XX)
+            inv_Sigma_YY = np.linalg.pinv(Sigma_YY)
+            M = inv_Sigma_XX @ Sigma_XY @ inv_Sigma_YY @ Sigma_XY.T
+            eigenvalues, eigenvectors = np.linalg.eig(M)
 
-            # Use eigh if symmetric-ish; but keep your eig style
-            evals, evecs = np.linalg.eig(M)
+            sorted_indices = np.argsort(eigenvalues)[::-1]
+            top_q_indices = sorted_indices[:q]
 
-            evals = np.real(evals)
-            evecs = np.real(evecs)
-
-            order = np.argsort(evals)[::-1]
-            sel = order[:q]
-
-            rho[i, :] = np.sqrt(np.clip(evals[sel], 0.0, None))
-            A = evecs[:, sel]
-            B = invSyy @ Sxy.T @ A
-
-            A, B = _stable_sign_flip(A, B)
-
-            a[i, :, :] = A
-            b[i, :, :] = B
+            rho[i] = np.sqrt(eigenvalues[top_q_indices])
+            a[i] = eigenvectors[:, top_q_indices]
+            b[i] = inv_Sigma_YY @ Sigma_XY.T @ a[i]
 
         except np.linalg.LinAlgError:
-            continue
+            rho[i] = np.nan
+            a[i] = np.nan
+            b[i] = np.nan
+
+        sign_vec = np.sign(a[i, 0, :])
+        sign_vec[sign_vec == 0] = 1
+        a[i] *= sign_vec
+        b[i] *= sign_vec
 
     return rho, a, b
 
 
-# ============================================================
-# Robust covariance via Huber IRLS
-# ============================================================
-
-def huber_weight(u, delta=1.345):
-    """
-    Huber IRLS weight: psi(u)/u with psi(u)=min(u, delta).
-    u must be nonnegative.
-    """
-    u = np.asarray(u, dtype=float)
+def _huber_weights(u, delta):
+    # u = |residual| / scale  (nonnegative)
+    # Huber weight = psi(u)/u with psi(u)=min(u, delta)
     w = np.ones_like(u)
     m = u > 0
     w[m] = np.minimum(u[m], delta) / (u[m] + 1e-15)
     return w
 
 
-def robust_cov_blocks_huber(X, Y, W_base, delta=1.345, max_iter=10, tol=1e-4):
+def robust_cov_block(X, Y, W_base, delta=1.345, max_iter=10, tol=1e-4):
     """
-    Robustify local covariance using Huber M-estimation (IRLS) on Z=[X,Y].
-
-    Returns
-    -------
-    Sxx, Syy, Sxy, W_eff, muX, muY
+    Robustify the local covariance using Huber M-estimation (IRLS) on the
+    concatenated vector Z=[X,Y]. Returns Sxx, Syy, Sxy with final weights applied.
+    - X: (m,p), Y: (m,q), W_base: (m,1) spatial kernel weights (>=0)
     """
-    X = np.asarray(X, dtype=float)
-    Y = np.asarray(Y, dtype=float)
-    W0 = np.asarray(W_base, dtype=float).reshape(-1, 1)
-    W0 = W0 / (W0.sum() + 1e-15)
-
     m, p = X.shape
     q = Y.shape[1]
-    Z = np.hstack([X, Y])
+    Z = np.hstack([X, Y])  # (m, p+q)
+    W = W_base.reshape(-1, 1).astype(float)
+    W = W / (W.sum() + 1e-15)
 
-    mu = (W0 * Z).sum(axis=0, keepdims=True)
+    # init location: spatially-weighted mean
+    mu = (W * Z).sum(axis=0, keepdims=True)
 
+    # scale for joint residual norm: MAD of norms (robust)
     r = np.linalg.norm(Z - mu, axis=1)
     med = np.median(r)
     mad = np.median(np.abs(r - med)) + 1e-12
     s = 1.4826 * mad if mad > 0 else (r.mean() + 1e-12)
 
-    W = W0.copy()
     for _ in range(max_iter):
-        r = np.linalg.norm(Z - mu, axis=1)
-        u = r / (s + 1e-15)
-        wh = huber_weight(u, delta).reshape(-1, 1)
-        W = W0 * wh
-        W = W / (W.sum() + 1e-15)
+        r = np.linalg.norm(Z - mu, axis=1)  # residual norms
+        u = r / (s + 1e-12)
+        w_h = _huber_weights(u, delta).reshape(-1, 1)
+        W_eff = W * w_h  # spatial × robust
 
-        mu_new = (W * Z).sum(axis=0, keepdims=True)
-        if np.linalg.norm(mu_new - mu) < tol:
-            mu = mu_new
-            break
+        mu_new = (W_eff * Z).sum(axis=0, keepdims=True) / (W_eff.sum() + 1e-15)
+        shift = np.linalg.norm(mu_new - mu)
         mu = mu_new
 
+        # re-estimate scale from weighted residuals (Huber proposal 2 style)
         r = np.linalg.norm(Z - mu, axis=1)
-        s = np.sqrt(np.sum(W.ravel() * np.minimum(r, delta * s) ** 2) / (W.sum() + 1e-15)) + 1e-12
+        s = np.sqrt(np.sum((W_eff.ravel() * np.minimum(r, delta * s) ** 2)) /
+                    (W_eff.sum() + 1e-15)) + 1e-12
 
-    muX = mu[:, :p].ravel()
-    muY = mu[:, p:].ravel()
-    Xc = X - muX
-    Yc = Y - muY
+        if shift < tol:
+            break
 
-    Sxx = (Xc * W).T @ Xc
-    Syy = (Yc * W).T @ Yc
-    Sxy = (Xc * W).T @ Yc
+    # final effective weights
+    r = np.linalg.norm(Z - mu, axis=1)
+    u = r / (s + 1e-12)
+    w_h = _huber_weights(u, delta).reshape(-1, 1)
+    W_eff = W * w_h
+    W_eff = W_eff / (W_eff.sum() + 1e-15)
 
-    return Sxx, Syy, Sxy, W, muX, muY
+    # split back into X/Y and form covariances
+    mu_X = mu[:, :p].ravel()
+    mu_Y = mu[:, p:].ravel()
+    Xc = X - mu_X
+    Yc = Y - mu_Y
+
+    Sxx = (Xc * W_eff).T @ Xc
+    Syy = (Yc * W_eff).T @ Yc
+    Sxy = (Xc * W_eff).T @ Yc
+    return Sxx, Syy, Sxy
 
 
-# ============================================================
-# Robust GWCCA local
-# ============================================================
-
-def gwcca_local_robust(
-    X, Y, coords, k_neighbors,
-    q=None,
-    include_self=True,
-    return_all=True,
-    delta=1.345,
-    max_iter=10,
-    tol=1e-4,
-    kernel="gaussian",
-    eps_eig=1e-12,
-    ridge=None
-):
+def gwcca_local_robust(X, Y, coords, k_neighbors, q=None, include_self=True, return_all=True,
+                       delta=1.345, max_iter=10, tol=1e-4,
+                       kernel="gaussian", eps_eig=1e-12, ridge=None):
     """
     Robust local GWCCA:
     - Robust covariance by Huber-IRLS on Z=[X,Y]
     - Whitening + SVD
     - Re-normalization so A^T Sxx A = I and B^T Syy B = I
-
-    Returns
-    -------
-    rho : (n,r)
-    a   : (n,p,r)
-    b   : (n,qY,r)
     """
-    X, Y, coords, k_neighbors = _check_inputs(X, Y, coords, k_neighbors)
     n, p = X.shape
     qY = Y.shape[1]
-    rmax = min(p, qY)
-
-    r = (q if q is not None else (rmax if return_all else 1))
-    r = int(min(r, rmax))
-    if r < 1:
-        raise ValueError("q (or r) must be >= 1.")
+    r_max = min(p, qY)
+    r = (q if q is not None else (r_max if return_all else 1))
+    r = min(r, r_max)
 
     rho = np.full((n, r), np.nan, dtype=float)
     a = np.full((n, p, r), np.nan, dtype=float)
@@ -317,6 +200,20 @@ def gwcca_local_robust(
 
     tree = cKDTree(coords)
 
+    def _kernel_weights(d, bw):
+        if kernel == "bisquare":
+            w = np.zeros_like(d)
+            m = d <= bw
+            w[m] = (1 - (d[m] / bw) ** 2) ** 2
+            return w
+        return np.exp(-(d / bw) ** 2)
+
+    def _huber_weights(u, delta_):
+        w = np.ones_like(u)
+        m = u > 0
+        w[m] = np.minimum(u[m], delta_) / (u[m] + 1e-15)
+        return w
+
     for i in range(n):
         d, idx = tree.query(coords[i], k=k_neighbors + 1)
         if not include_self:
@@ -325,39 +222,65 @@ def gwcca_local_robust(
         if idx.size < 2:
             continue
 
-        bw = float(d[-1]) if d.size > 0 else 1.0
-        w0 = _kernel_weights(d, bw, kernel=kernel).reshape(-1, 1)
-        w0 = w0 / (w0.sum() + 1e-15)
+        bw = d[-1] if d.size > 0 else 1.0
+        w0 = _kernel_weights(d, bw).reshape(-1, 1)
+        w0 /= (w0.sum() + 1e-15)
 
         Xi, Yi = X[idx], Y[idx]
-        Sxx, Syy, Sxy, _, _, _ = robust_cov_blocks_huber(
-            Xi, Yi, w0, delta=delta, max_iter=max_iter, tol=tol
-        )
+        Z = np.hstack([Xi, Yi])  # (m, p+qY)
+
+        #
+        W = w0.copy()
+        mu = (W * Z).sum(axis=0, keepdims=True)
+
+        rn = np.linalg.norm(Z - mu, axis=1)
+        med = np.median(rn)
+        mad = np.median(np.abs(rn - med)) + 1e-12
+        s = 1.4826 * mad if mad > 0 else (rn.mean() + 1e-12)
+
+        for _ in range(max_iter):
+            rn = np.linalg.norm(Z - mu, axis=1)
+            u = rn / (s + 1e-15)
+            wh = _huber_weights(u, delta).reshape(-1, 1)
+            W = (w0 * wh)
+            W /= (W.sum() + 1e-15)
+
+            mu_new = (W * Z).sum(axis=0, keepdims=True)
+            if np.linalg.norm(mu_new - mu) < tol:
+                mu = mu_new
+                break
+            mu = mu_new
+
+            rn = np.linalg.norm(Z - mu, axis=1)
+            s = np.sqrt(np.sum((W.ravel() * np.minimum(rn, delta * s) ** 2)) /
+                        (W.sum() + 1e-15)) + 1e-12
+
+        W /= (W.sum() + 1e-15)
+
+        mu_X = mu[:, :p].ravel()
+        mu_Y = mu[:, p:].ravel()
+        Xc = Xi - mu_X
+        Yc = Yi - mu_Y
+
+        Sxx = (Xc * W).T @ Xc
+        Syy = (Yc * W).T @ Yc
+        Sxy = (Xc * W).T @ Yc
 
         if ridge is not None and ridge > 0:
             Sxx = Sxx + float(ridge) * np.eye(p)
             Syy = Syy + float(ridge) * np.eye(qY)
 
-        try:
-            eval_x, evec_x = np.linalg.eigh(Sxx)
-            eval_y, evec_y = np.linalg.eigh(Syy)
-        except np.linalg.LinAlgError:
-            continue
-
+        eval_x, evec_x = np.linalg.eigh(Sxx)
+        eval_y, evec_y = np.linalg.eigh(Syy)
         eval_x = np.clip(eval_x, eps_eig, None)
         eval_y = np.clip(eval_y, eps_eig, None)
-
         Sxx_mh = evec_x @ np.diag(1.0 / np.sqrt(eval_x)) @ evec_x.T
         Syy_mh = evec_y @ np.diag(1.0 / np.sqrt(eval_y)) @ evec_y.T
 
         K = Sxx_mh @ Sxy @ Syy_mh
 
-        try:
-            U, svals, Vt = np.linalg.svd(K, full_matrices=False)
-        except np.linalg.LinAlgError:
-            continue
-
-        svals = svals[:r]
+        U, s, Vt = np.linalg.svd(K, full_matrices=False)
+        s = s[:r]
         U = U[:, :r]
         Vt = Vt[:r, :]
 
@@ -367,81 +290,67 @@ def gwcca_local_robust(
         for j in range(r):
             aj = A[:, j]
             bj = B[:, j]
-            A[:, j] = aj / (np.sqrt(aj.T @ Sxx @ aj) + 1e-15)
-            B[:, j] = bj / (np.sqrt(bj.T @ Syy @ bj) + 1e-15)
+            sxa = float(np.sqrt(aj.T @ Sxx @ aj) + 1e-15)
+            syb = float(np.sqrt(bj.T @ Syy @ bj) + 1e-15)
+            A[:, j] = aj / sxa
+            B[:, j] = bj / syb
 
-        A, B = _stable_sign_flip(A, B)
+        signs = np.sign(A[0, :]);
+        signs[signs == 0] = 1.0
+        A *= signs;
+        B *= signs
 
-        rho[i, :] = svals
+        rho[i, :] = s
         a[i, :, :] = A
         b[i, :, :] = B
 
     return rho, a, b
 
 
-# ============================================================
-# Spatial smoothing of loadings
-# ============================================================
-
-def spatial_smooth_loadings(loadings, coords, k_neighbors, kernel="gaussian"):
+# Spatial Smoothing of Loadings using KNN-based Gaussian kernel smoother
+def spatial_smooth_loadings(loadings, coords, k_neighbors):
     """
-    Spatial smoothing of local loadings using KNN Gaussian weights.
-    Parameters
-    ----------
-    loadings : (n,p,q)
-    coords   : (n,2)
-    k_neighbors : int
-    kernel : {"gaussian","bisquare"}
-    Returns
-    -------
-    smoothed : (n,p,q)
+    Smooth spatially varying loadings using a KNN-based Gaussian kernel smoother.
+    :param loadings: Array of loadings (n x p x q).
+    :param coords: Array of coordinates (n x 2).
+    :param k_neighbors: Number of nearest neighbors to use for smoothing.
+    :return: Smoothed loadings (n x p x q).
     """
-    loadings = np.asarray(loadings, dtype=float)
-    coords = np.asarray(coords, dtype=float)
     n, p, q = loadings.shape
-
     smoothed = np.zeros_like(loadings)
     tree = cKDTree(coords)
 
     for i in range(n):
+        # Use the same k_neighbors for smoothing (including self)
         d, idx = tree.query(coords[i], k=k_neighbors + 1)
-        bw = float(d[-1]) if d.size > 0 else 1.0
-        w = _kernel_weights(d, bw, kernel=kernel)
-        w = w / (w.sum() + 1e-15)
-        smoothed[i] = np.average(loadings[idx], axis=0, weights=w)
+        # Set bandwidth as the distance to the k-th neighbor
+        bandwidth = d[-1]
+        weights = gaussian_kernel(d, bandwidth)
+        weights = weights / weights.sum()
+        smoothed[i] = np.average(loadings[idx], axis=0, weights=weights)
 
     return smoothed
 
 
-# ============================================================
-# One-shot GWCCA (local + smoothing)
-# ============================================================
-
-def gwcca(X, Y, coords, k_neighbors, q=2, robust=False, kernel="gaussian", **robust_kwargs):
+# Combined GWCCA with Spatially Varying Loadings and local mean removal in covariance computation
+def gwcca(X, Y, coords, k_neighbors, q=2):
     """
-    Run GWCCA and then spatially smooth the loadings.
-    Parameters
-    ----------
-    robust : bool
-        If True use gwcca_local_robust, otherwise gwcca_local.
-    robust_kwargs :
-        Passed to gwcca_local_robust (e.g., delta, max_iter, tol, ridge).
-    Returns
-    -------
-    rho, a_smoothed, b_smoothed
+    Compute GWCCA and then smooth the canonical loadings spatially.
+    :param X: (n x p) data array for set X.
+    :param Y: (n x q) data array for set Y.
+    :param coords: (n x 2) coordinate array.
+    :param k_neighbors: Number of nearest neighbors for both local estimation and smoothing.
+    :param q: Number of canonical variables to retain.
+    :return: rho, a_smoothed, b_smoothed.
     """
-    if robust:
-        rho, a, b = gwcca_local_robust(X, Y, coords, k_neighbors, q=q, kernel=kernel, **robust_kwargs)
-    else:
-        rho, a, b = gwcca_local(X, Y, coords, k_neighbors, q=q, kernel=kernel)
-    a_sm = spatial_smooth_loadings(a, coords, k_neighbors, kernel=kernel)
-    b_sm = spatial_smooth_loadings(b, coords, k_neighbors, kernel=kernel)
-    return rho, a_sm, b_sm
+    # Estimate local canonical parameters
+    # rho, a, b = gwcca_local(X, Y, coords, k_neighbors, q)
+    rho, a, b = gwcca_local_robust(X, Y, coords, k_neighbors, q)
+    # Smooth the estimated loadings across space using the same k_neighbors
+    a_smoothed = spatial_smooth_loadings(a, coords, k_neighbors)
+    b_smoothed = spatial_smooth_loadings(b, coords, k_neighbors)
+    return rho, a_smoothed, b_smoothed
 
-
-# ============================================================
-# Tuning utilities (your joint_optimize_k_q_early)
-# ============================================================
 
 def _concat_last_coeffs(A_full, B_full, idx):
     parts = []
@@ -451,14 +360,10 @@ def _concat_last_coeffs(A_full, B_full, idx):
         parts.append(B_full[:, :, idx])
     if not parts:
         return None
-    return np.concatenate(parts, axis=1)
+    return np.concatenate(parts, axis=1)  # (n, p+qY)
 
 
 def _support_ratio(coefs_last, thr, frac=0.3):
-    """
-    Your original support criterion: location counts whose proportion of
-    (|coef| > thr) across features exceeds frac.
-    """
     if coefs_last is None or thr is None:
         return 0.0
     hit = (np.abs(coefs_last) > thr).astype(float)
@@ -475,33 +380,19 @@ def _cosine_sim(U, V, eps=1e-12):
 
 
 def joint_optimize_k_q_early(
-    X, Y, coords,
-    K_grid, q_grid, include_self=True,
-    thr=None,
-    min_support=None,
-    support_mode="loc_any",   # kept for API compatibility; not used in your _support_ratio
-    thr_quantile=95.0,
-    thr_scale=0.5,
-    support_rel=0.80,
-    eps=1e-12, gof_floor=1e-8, enforce_q_lt_r=False,
-    rel_tol=0.01, patience=2,
-    slack=0.02,
-    use_stability=True, dK=5, stab_tau=0.90,
-    kernel="gaussian",
-    robust=True,
-    robust_kwargs=None
+        X, Y, coords,
+        K_grid, q_grid, include_self=True,
+        thr=None,
+        min_support=None,
+        support_mode="loc_any",
+        thr_quantile=95.0,
+        thr_scale=0.5,
+        support_rel=0.80,
+        eps=1e-12, gof_floor=1e-8, enforce_q_lt_r=False,
+        rel_tol=0.01, patience=2,
+        slack=0.02,
+        use_stability=True, dK=5, stab_tau=0.90,
 ):
-    """
-    Joint tuning of (k_neighbors, q) with early stopping.
-
-    Notes
-    -----
-    - By default robust=True because your original joint optimizer calls gwcca_local_robust.
-      If you want the classical version, set robust=False.
-    """
-    X, Y, coords, _ = _check_inputs(X, Y, coords, k_neighbors=1)
-    robust_kwargs = robust_kwargs or {}
-
     K_list = sorted(list(K_grid))
     q_list = list(q_grid)
 
@@ -511,39 +402,28 @@ def joint_optimize_k_q_early(
     stab_list = [np.nan] * len(K_list)
 
     cache = {}
+
     def fit_at_K(K):
         if K not in cache:
-            if robust:
-                rho, A, B = gwcca_local_robust(
-                    X, Y, coords, K,
-                    include_self=include_self,
-                    return_all=True,
-                    kernel=kernel,
-                    **robust_kwargs
-                )
-            else:
-                # For normal, we compute up to rmax by calling with q=rmax
-                rmax = min(X.shape[1], Y.shape[1])
-                rho, A, B = gwcca_local(
-                    X, Y, coords, K,
-                    q=rmax,
-                    include_self=include_self,
-                    kernel=kernel
-                )
+            # rho, A, B = gwcca_local_robust(X, Y, coords, K, include_self=include_self, return_all=True)
+            rho, A, B = gwcca_local_robust(X, Y, coords, K, include_self=include_self, return_all=True)
             cache[K] = (rho, A, B)
         return cache[K]
 
-    # threshold
     if thr is None:
         if len(K_list) == 0:
             raise ValueError("K_grid is empty.")
-        pilot_K = K_list[len(K_list)//2]
+        pilot_K = K_list[len(K_list) // 2]
         _, A_pilot, B_pilot = fit_at_K(pilot_K)
-        parts = []
-        if A_pilot is not None: parts.append(np.abs(A_pilot).ravel())
-        if B_pilot is not None: parts.append(np.abs(B_pilot).ravel())
-        all_abs = np.concatenate(parts) if parts else np.array([np.nan])
-        thr_used = np.nanpercentile(all_abs, thr_quantile) * float(thr_scale)
+        if (A_pilot is None) and (B_pilot is None):
+            thr_auto = None
+        else:
+            parts = []
+            if A_pilot is not None: parts.append(np.abs(A_pilot).ravel())
+            if B_pilot is not None: parts.append(np.abs(B_pilot).ravel())
+            all_abs = np.concatenate(parts) if parts else np.array([np.nan])
+            thr_auto = np.nanpercentile(all_abs, thr_quantile) * float(thr_scale)
+        thr_used = thr_auto
     else:
         thr_used = float(thr)
 
@@ -559,13 +439,14 @@ def joint_optimize_k_q_early(
             S_vals = []
             for qq in q_list:
                 if 1 <= qq <= r:
-                    coefs_last_tmp = _concat_last_coeffs(A_full, B_full, qq-1)
+                    coefs_last_tmp = _concat_last_coeffs(A_full, B_full, qq - 1)
                     S_vals.append(_support_ratio(coefs_last_tmp, thr_used))
             mean_support_K = float(np.nanmean(S_vals)) if len(S_vals) else 0.0
             min_support_used = support_rel * mean_support_K
         else:
             min_support_used = float(min_support)
 
+        # --- pick largest significant q* at this K ---
         chosen_q, chosen_support = None, 0.0
         for qq in q_list:
             if qq < 1 or qq > r:
@@ -573,7 +454,7 @@ def joint_optimize_k_q_early(
             if enforce_q_lt_r and qq >= r:
                 continue
             coefs_last = _concat_last_coeffs(A_full, B_full, qq - 1)
-            sup_ratio = _support_ratio(coefs_last, thr_used)
+            sup_ratio = _support_ratio(coefs_last, thr=thr_used)
             if sup_ratio >= min_support_used:
                 chosen_q, chosen_support = qq, sup_ratio
 
@@ -601,7 +482,7 @@ def joint_optimize_k_q_early(
                 rho_p, A_p, B_p = fit_at_K(Kp)
                 if chosen_q <= rho_p.shape[1]:
                     U = _concat_last_coeffs(A_full, B_full, chosen_q - 1)
-                    V = _concat_last_coeffs(A_p,    B_p,    chosen_q - 1)
+                    V = _concat_last_coeffs(A_p, B_p, chosen_q - 1)
                     if U is not None and V is not None and U.shape == V.shape:
                         sims = _cosine_sim(U, V, eps=eps)
                         stab_list[i] = float(np.nanmedian(sims))
@@ -610,7 +491,7 @@ def joint_optimize_k_q_early(
             if last_gof is None:
                 last_gof, no_improve = gof, 0
             else:
-                rel_impr = (last_gof - gof) / max(last_gof, eps)
+                rel_impr = (last_gof - gof) / max(last_gof, eps)  # (GOF_k - GOF_{k+1}) / GOF_k
                 if rel_impr > rel_tol:
                     no_improve = 0
                 else:
@@ -620,6 +501,7 @@ def joint_optimize_k_q_early(
                         break
                 last_gof = gof
 
+    # --- near-opt selection within observed range [0:stop_idx) ---
     observed = slice(0, stop_idx)
     have = np.isfinite(gof_arr[observed]) & (np.array(q_star_list[observed]) != None)
     if not np.any(have):
@@ -637,16 +519,16 @@ def joint_optimize_k_q_early(
                 support_mode=support_mode,
                 eps=eps, gof_floor=gof_floor, enforce_q_lt_r=enforce_q_lt_r,
                 rel_tol=rel_tol, patience=patience, slack=slack,
-                use_stability=use_stability, dK=dK, stab_tau=stab_tau,
-                kernel=kernel, robust=robust, robust_kwargs=robust_kwargs
+                use_stability=use_stability, dK=dK, stab_tau=stab_tau
             ),
             "note": "no valid (K,q*) before early-stop (auto thresholds active)"
         }
 
     gof_obs = gof_arr[observed][have]
-    K_obs   = np.array(K_list)[observed][have]
-    q_obs   = np.array([q if q is not None else -1 for q in q_star_list[observed]])[have]
-    stab_obs= np.array(stab_list)[observed][have]
+    K_obs = np.array(K_list)[observed][have]
+    q_obs = np.array([q if q is not None else -1 for q in q_star_list[observed]])[have]
+    sup_obs = np.array(support_list)[observed][have]
+    stab_obs = np.array(stab_list)[observed][have]
 
     gmin = np.min(gof_obs)
     near = gof_obs <= (1.0 + slack) * gmin
@@ -680,13 +562,12 @@ def joint_optimize_k_q_early(
             support_mode=support_mode,
             eps=eps, gof_floor=gof_floor, enforce_q_lt_r=enforce_q_lt_r,
             rel_tol=rel_tol, patience=patience, slack=slack,
-            use_stability=use_stability, dK=dK, stab_tau=stab_tau,
-            kernel=kernel, robust=robust, robust_kwargs=robust_kwargs
+            use_stability=use_stability, dK=dK, stab_tau=stab_tau
         ),
-        "thr_used": thr_used,
-        "note": "early-stopping + near-opt selection with CCA-style GOF"
+        "note": "early-stopping (adjacent-K) + near-opt selection with CCA-style GOF; auto thresholds if None"
     }
     return best_K, best_q, best_g, summary
+
 
 def plot_gwcca_result(gdf, coefficient, title, component_idx=1, ax=None):
     """
@@ -718,7 +599,7 @@ def plot_loading_maps(gdf,
                       component_idx=1,
                       nrows=2,
                       ncols=2,
-                      figsize=(10,7),
+                      figsize=(10, 7),
                       cmap="RdBu",
                       diverging=True):
     """
@@ -730,15 +611,15 @@ def plot_loading_maps(gdf,
 
     # decide global min/max so every subplot shares the same scale
     if diverging:
-        vmax = np.nanmax(np.abs(loading[:,:,component_idx-1]))
+        vmax = np.nanmax(np.abs(loading[:, :, component_idx - 1]))
         vmin = -vmax
         norm = TwoSlopeNorm(vmin=vmin, vcenter=0, vmax=vmax)
     else:
-        vmin, vmax, norm = None, None, None     # fallback to default
+        vmin, vmax, norm = None, None, None  # fallback to default
 
     for i, ax in enumerate(axes):
         if i < p:
-            gdf["loading"] = loading[:, i, component_idx-1]
+            gdf["loading"] = loading[:, i, component_idx - 1]
             gdf.plot(column="loading",
                      ax=ax,
                      cmap=cmap,
@@ -754,12 +635,13 @@ def plot_loading_maps(gdf,
 
     plt.tight_layout()
 
+
 def gwcca_local_permutation_test(
-    X, Y, coords, k_neighbors, q,
-    rho_obs,
-    n_perm=999,
-    random_state=0,
-    two_sided=True
+        X, Y, coords, k_neighbors, q,
+        rho_obs,
+        n_perm=999,
+        random_state=0,
+        two_sided=True
 ):
     """
     Local permutation significance test for GWCCA canonical correlations.
@@ -801,11 +683,65 @@ def gwcca_local_permutation_test(
 
         if two_sided:
             pvals[:, k] = (
-                np.sum(np.abs(null) >= np.abs(obs), axis=0) + 1
-            ) / (n_perm + 1)
+                                  np.sum(np.abs(null) >= np.abs(obs), axis=0) + 1
+                          ) / (n_perm + 1)
         else:
             pvals[:, k] = (
-                np.sum(null >= obs, axis=0) + 1
-            ) / (n_perm + 1)
+                                  np.sum(null >= obs, axis=0) + 1
+                          ) / (n_perm + 1)
 
     return pvals
+
+
+def save_results_to_csv(gdf, rho, a, b, X_columns, Y_columns, filename="gwcca_results.csv"):
+    """
+    Save GWCCA results (rho, a, b) as a CSV file.
+    :param gdf: GeoDataFrame containing spatial data.
+    :param rho: Local canonical correlations.
+    :param a: Canonical loadings for X variables.
+    :param b: Canonical loadings for Y variables.
+    :param X_columns: List of X variable names.
+    :param Y_columns: List of Y variable names.
+    :param filename: Output CSV filename.
+    """
+    results = gdf.copy()
+    results["rho1"] = rho[:, 0]
+    results["rho2"] = rho[:, 1]
+
+    for i, col in enumerate(X_columns):
+        results[f"a1_{col}"] = a[:, i, 0]
+        results[f"a2_{col}"] = a[:, i, 1]
+
+    for i, col in enumerate(Y_columns):
+        results[f"b1_{col}"] = b[:, i, 0]
+        results[f"b2_{col}"] = b[:, i, 1]
+
+    results.to_csv(filename, index=False)
+    print(f"Results saved to {filename}")
+
+
+def save_to_geo(gdf, rho, a, b, X_columns, Y_columns, filename="gwcca_results.geojson"):
+    """
+    Save GWCCA results (rho, a, b) as a GeoJSON file.
+    :param gdf: GeoDataFrame containing spatial data.
+    :param rho: Local canonical correlations.
+    :param a: Canonical loadings for X variables.
+    :param b: Canonical loadings for Y variables.
+    :param X_columns: List of X variable names.
+    :param Y_columns: List of Y variable names.
+    :param filename: Output filename.
+    """
+    results = gdf.copy()
+    results["rho1"] = rho[:, 0]
+    results["rho2"] = rho[:, 1]
+
+    for i, col in enumerate(X_columns):
+        results[f"a1_{col}"] = a[:, i, 0]
+        results[f"a2_{col}"] = a[:, i, 1]
+
+    for i, col in enumerate(Y_columns):
+        results[f"b1_{col}"] = b[:, i, 0]
+        results[f"b2_{col}"] = b[:, i, 1]
+
+    results.to_file(filename, driver="GeoJSON")
+    print(f"Results saved to {filename}")
