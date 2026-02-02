@@ -1,24 +1,25 @@
 [build-system]
-requires = ["setuptools>=61.0"]
+requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "gwcca"
 version = "0.1.0"
-description = "Geographically Weighted Canonical Correlation Analysis (GWCCA) with robust local covariance and optional smoothing."
+description = "Geographically Weighted Canonical Correlation Analysis (GWCCA) in Python"
 readme = "README.md"
 requires-python = ">=3.9"
+license = {file = "LICENSE"}
+authors = [
+  {name = "Joseph Jiao", email = "your_email@example.com"}
+]
 dependencies = [
-  "numpy>=1.22",
-  "scipy>=1.9",
-  "matplotlib>=3.6"
+  "numpy",
+  "scipy",
 ]
 
-[project.optional-dependencies]
-geo = [
-  "geopandas>=0.12",
-  "pyogrio>=0.7"
-]
-plot = [
-  "matplotlib>=3.6"
-]
+[project.urls]
+Homepage = "https://github.com/Josephjiao7/Geographically-Weighted-Canonical-Correlation-Analysis"
+Issues = "https://github.com/Josephjiao7/Geographically-Weighted-Canonical-Correlation-Analysis/issues"
+
+[tool.setuptools]
+py-modules = ["gwcca"]
