@@ -1,6 +1,9 @@
 import numpy as np
 from scipy.spatial import cKDTree
-
+import matplotlib.pyplot as plt
+from sklearn.preprocessing import StandardScaler
+import matplotlib.colors as mcolors
+from matplotlib.colors import TwoSlopeNorm
 
 # ============================================================
 # Kernels
@@ -684,3 +687,69 @@ def joint_optimize_k_q_early(
         "note": "early-stopping + near-opt selection with CCA-style GOF"
     }
     return best_K, best_q, best_g, summary
+
+def plot_gwcca_result(gdf, coefficient, title, component_idx=1, ax=None):
+    """
+    Visualize a given GWCCA result (rho or loadings), optionally on a provided matplotlib axis.
+
+    Parameters:
+        gdf (GeoDataFrame): spatial data
+        coefficient (ndarray): matrix of shape (n, q)
+        title (str): title of the map
+        component_idx (int): which canonical component to plot (1-based)
+        ax (matplotlib axis): optional axis to draw on
+    """
+    if ax is None:
+        fig, ax = plt.subplots(figsize=(12, 8))
+
+    gdf['coefficient'] = coefficient[:, component_idx - 1]
+    gdf.plot(column='coefficient', ax=ax, cmap='viridis', legend=True, legend_kwds={'shrink': 0.8})
+    gdf.boundary.plot(ax=ax, linewidth=0.02, color='black')
+
+    ax.set_title(f"{title} (Variate {component_idx})")
+    ax.set_xlabel("Longitude")
+    ax.set_ylabel("Latitude")
+    return ax
+
+
+def plot_loading_maps(gdf,
+                      loading,
+                      feature_names,
+                      component_idx=1,
+                      nrows=2,
+                      ncols=2,
+                      figsize=(10,7),
+                      cmap="RdBu",
+                      diverging=True):
+    """
+    Plot local loadings; if diverging=True the colour map is centred at 0.
+    """
+    p = loading.shape[1]
+    fig, axes = plt.subplots(nrows, ncols, figsize=figsize, sharey=True)
+    axes = axes.flatten()
+
+    # decide global min/max so every subplot shares the same scale
+    if diverging:
+        vmax = np.nanmax(np.abs(loading[:,:,component_idx-1]))
+        vmin = -vmax
+        norm = TwoSlopeNorm(vmin=vmin, vcenter=0, vmax=vmax)
+    else:
+        vmin, vmax, norm = None, None, None     # fallback to default
+
+    for i, ax in enumerate(axes):
+        if i < p:
+            gdf["loading"] = loading[:, i, component_idx-1]
+            gdf.plot(column="loading",
+                     ax=ax,
+                     cmap=cmap,
+                     norm=norm,
+                     vmin=vmin,
+                     vmax=vmax,
+                     legend=True)
+            gdf.boundary.plot(ax=ax, linewidth=0.1, color="black")
+            ax.set_title(f"{feature_names[i]}  (variate {component_idx})", fontsize=9)
+            # ax.set_axis_off()
+        else:
+            ax.set_visible(False)
+
+    plt.tight_layout()
