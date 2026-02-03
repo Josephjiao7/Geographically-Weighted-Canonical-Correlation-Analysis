@@ -2,7 +2,7 @@
 
 <p align="center">
 
-  <img src="assets/GWCCA Logo.png" width="800" alt="GWCCA Logo">
+<img src="assets/logo.png" width="1200" alt="GWCCA Logo">
 </p>
 
 This module provides functionality to calibrate GWCCA for local spatial associations between two sets of variables
