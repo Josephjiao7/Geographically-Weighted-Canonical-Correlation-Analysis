@@ -21,4 +21,4 @@ This article critically assesses the utility of the classical statistical techni
 
 ### Citation:
 
-To cite this paper: Zhenzhi Jiao, Angela Yao, Ran Tao and Jean-Claude Thill (2026). Geographically Weighted Canonical Correlation Analysis: Local Spatial Associations Between Two Sets of Variables. Annals of the American Association of Geographers. (forthcoming)
+Jiao, Z., Yao, A., Tao, R., & Thill, J. C. (2026). Geographically Weighted Canonical Correlation Analysis: Local Spatial Associations between Two Sets of Variables.  *Annals of the American Association of Geographers* , 1–30. https://doi.org/10.1080/24694452.2026.2654491
